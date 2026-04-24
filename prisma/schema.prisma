@@ -1,0 +1,262 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ENGINEER
+  BENCH_MANAGER
+  TALENT
+  PRACTICE_LEAD
+  COMPLIANCE
+}
+
+// Auth.js (NextAuth) models
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+
+  role          UserRole  @default(ENGINEER)
+
+  accounts      Account[]
+  sessions      Session[]
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  engineer      Engineer?
+
+  createdInterviewPlans InterviewPlan[] @relation("InterviewPlanCreatedBy")
+  signedOffInterviews   Interview[]     @relation("InterviewSignedOffBy")
+  observerEvents        ObserverEvent[]
+}
+
+model Account {
+  id                String   @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// Domain models (MVP)
+model Engineer {
+  id              String    @id @default(cuid())
+  userId          String    @unique
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  gradeLevel      String?
+  yearsExperience Int?
+  lastEngagement  String?
+  primaryTrack    String?
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  resumes         Resume[]
+  interviews      Interview[]
+  interviewPlans  InterviewPlan[]
+}
+
+model Resume {
+  id          String   @id @default(cuid())
+  engineerId  String
+  engineer    Engineer @relation(fields: [engineerId], references: [id], onDelete: Cascade)
+
+  filename    String
+  mimeType    String
+  storageKey  String   // MVP: a reference; integrate blob storage later
+
+  createdAt   DateTime @default(now())
+}
+
+model JobDescription {
+  id         String   @id @default(cuid())
+  title      String?
+  source     String?  // "paste" | "pdf" | "docx"
+  text       String?  // MVP: store extracted text
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  interviews Interview[]
+  plans      InterviewPlan[]
+}
+
+model RubricVersion {
+  id          String   @id @default(cuid())
+  roleType    String   // e.g. "Backend Engineer"
+  level       String   // e.g. "Senior"
+  version     Int
+  definition  String   // JSON as string for MVP
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([roleType, level, version])
+
+  interviews  Interview[]
+}
+
+// Talent-managed curated question bank (MVP)
+model Question {
+  id         String   @id @default(cuid())
+  skillTrack String?  // backend/frontend/data/etc
+  level      String?  // mid/senior/etc
+  slot       Int?     // 1-10 interview slot mapping
+  theme      String?  // e.g. "system design"
+  prompt     String
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  variants   QuestionVariant[]
+}
+
+model QuestionVariant {
+  id         String   @id @default(cuid())
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  text       String
+  createdAt  DateTime @default(now())
+}
+
+model InterviewPlan {
+  id             String   @id @default(cuid())
+  engineerId     String
+  engineer       Engineer @relation(fields: [engineerId], references: [id], onDelete: Cascade)
+  jdId           String
+  jd             JobDescription @relation(fields: [jdId], references: [id], onDelete: Cascade)
+
+  slotsJson      String   // JSON for 10-slot plan (themes, difficulty, durations)
+  gapMapJson     String   // JSON for JD vs resume gap map
+
+  createdByUserId String
+  createdBy       User     @relation("InterviewPlanCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  interview      Interview?
+}
+
+enum InterviewStatus {
+  DRAFT
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  REVIEW_PENDING
+  SIGNED_OFF
+}
+
+enum ReadinessVerdict {
+  READY
+  NEEDS_1_WEEK_PREP
+  NEEDS_RESKILLING
+  MISMATCH_WITH_JD
+}
+
+model Interview {
+  id              String          @id @default(cuid())
+  engineerId      String
+  engineer        Engineer        @relation(fields: [engineerId], references: [id], onDelete: Cascade)
+  jdId            String
+  jd              JobDescription  @relation(fields: [jdId], references: [id], onDelete: Cascade)
+  planId          String?         @unique
+  plan            InterviewPlan?  @relation(fields: [planId], references: [id], onDelete: SetNull)
+
+  status          InterviewStatus @default(DRAFT)
+
+  scheduledAt     DateTime?
+  startedAt       DateTime?
+  endedAt         DateTime?
+
+  transcriptJson  String?         // MVP: store transcript as JSON
+  audioStorageKey String?         // MVP: pointer to blob storage or local file
+
+  rubricRoleType  String?
+  rubricLevel     String?
+  rubricVersionId String?
+  rubricVersion   RubricVersion?  @relation(fields: [rubricVersionId], references: [id], onDelete: SetNull)
+
+  proposedVerdict ReadinessVerdict?
+  finalVerdict    ReadinessVerdict?
+
+  signOffByUserId String?
+  signOffBy       User?           @relation("InterviewSignedOffBy", fields: [signOffByUserId], references: [id], onDelete: SetNull)
+  signOffNote     String?
+  signedOffAt     DateTime?
+
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  scores          Score[]
+  observerEvents  ObserverEvent[]
+}
+
+model Score {
+  id          String   @id @default(cuid())
+  interviewId String
+  interview   Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+
+  dimension   String   // "TechnicalDepth" etc.
+  value       Int      // 1-5
+  rationale   String?
+  evidence    String?  // transcript span pointers (JSON string)
+
+  createdAt   DateTime @default(now())
+}
+
+model ObserverEvent {
+  id          String   @id @default(cuid())
+  interviewId String
+  interview   Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+
+  observerUserId String
+  observer       User   @relation(fields: [observerUserId], references: [id], onDelete: Cascade)
+
+  kind        String   // "SOFT_INJECT" | "HARD_INJECT" | "FLAG_ANSWER"
+  payloadJson String
+
+  createdAt   DateTime @default(now())
+}
